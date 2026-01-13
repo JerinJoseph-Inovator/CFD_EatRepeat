@@ -1,0 +1,7 @@
+{
+  "name": "CFD EatRepeat",
+  "description": "A smart food inventory analysis system that tracks freshness, nutrition, and provides recipe suggestions using visual AI.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
