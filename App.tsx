@@ -1,481 +1,365 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { Command, FoodItem, Recipe, AnalysisResponse } from './types';
-import { analyzeFood } from './geminiService';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Command, FoodItem, UserProfile, AnalysisResponse } from './types';
+import { ASSETS } from './constants/assets';
+import { useInventory } from './hooks/useInventory';
+import Header from './components/Layout/Header';
 import Scanner from './components/Scanner';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import ChefAvatar from './components/Chef/ChefAvatar';
+import { analyzeFood } from './geminiService';
 
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<Command>(Command.SCAN_ITEM);
-  const [inventory, setInventory] = useState<FoodItem[]>(() => {
-    const saved = localStorage.getItem('fresh-track-inventory');
-    return saved ? JSON.parse(saved) : [];
+  const { inventory, addItem, removeItem } = useInventory();
+  const [activeTab, setActiveTab] = useState<Command>(Command.SHOW_INVENTORY);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
+    const saved = localStorage.getItem('eat-repeat-profile');
+    return saved ? JSON.parse(saved) : null;
   });
+
+  // Flow & Onboarding State
+  const [onboardingStage, setOnboardingStage] = useState<'greeting' | 'name' | 'demo' | 'origin' | 'cuisine' | 'complete'>('greeting');
+  const [isMainBubbleActive, setIsMainBubbleActive] = useState(true);
   const [loading, setLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
+  const [tutorialNarration, setTutorialNarration] = useState("");
+  const [tutorialAssetsFlying, setTutorialAssetsFlying] = useState<string[]>([]);
+  const [chatHistory, setChatHistory] = useState<{ role: 'gusto' | 'user', text: string }[]>([]);
+  const [chefInput, setChefInput] = useState("");
+  const [isThinking, setIsThinking] = useState(false);
 
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const isDemoRunning = useMemo(() => onboardingStage === 'demo', [onboardingStage]);
+  const showAppUI = useMemo(() => !!userProfile || isDemoRunning, [userProfile, isDemoRunning]);
+
+  // Scroll chat to bottom
   useEffect(() => {
-    localStorage.setItem('fresh-track-inventory', JSON.stringify(inventory));
-  }, [inventory]);
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory, isThinking]);
 
-  const handleScanAnalysis = async (images: string[]) => {
-    setLoading(true);
-    setAnalysisResult(null);
+  // Initial greeting
+  useEffect(() => {
+    if (!userProfile && chatHistory.length === 0) {
+      setChatHistory([{ 
+        role: 'gusto', 
+        text: "Bonjour! I am Chef Gusto. For 45 years, I've mastered the art of the pantry. Now, I'm here to bring AI precision to your home. Tell me, mon ami, what is your name?" 
+      }]);
+      setOnboardingStage('name');
+    }
+  }, [userProfile]);
+
+  const handleChatSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chefInput.trim() || isThinking) return;
+
+    const userInput = chefInput.trim();
+    setChatHistory(prev => [...prev, { role: 'user', text: userInput }]);
+    setChefInput("");
+    setIsThinking(true);
+
     try {
-      const response = await analyzeFood(Command.SCAN_ITEM, images);
-      if (response.item) {
-        setAnalysisResult(response);
-      } else {
-        alert("Gemini couldn't identify the item clearly. Please try scanning more clearly.");
-      }
-    } catch (error) {
-      console.error("Analysis failed:", error);
-      alert("Failed to analyze images. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const addItemToInventory = () => {
-    if (analysisResult?.item) {
-      const newItem: FoodItem = {
-        ...analysisResult.item,
-        id: crypto.randomUUID(),
-        addedDate: new Date().toISOString()
-      };
-      setInventory(prev => [newItem, ...prev]);
-      setAnalysisResult(null);
-      setActiveTab(Command.SHOW_INVENTORY);
-    }
-  };
-
-  const removeItem = (id: string) => {
-    setInventory(prev => prev.filter(item => item.id !== id));
-  };
-
-  const executeCommand = async (cmd: Command) => {
-    setActiveTab(cmd);
-    if (cmd === Command.SCAN_ITEM || cmd === Command.SHOW_INVENTORY) return;
-
-    setLoading(true);
-    setAnalysisResult(null);
-    try {
-      const response = await analyzeFood(cmd, undefined, inventory);
-      setAnalysisResult(response);
-    } catch (error) {
-      console.error("Command execution failed:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const renderDashboard = () => {
-    const expiringSoon = inventory.filter(item => {
-      if (!item.expiryDate && !item.shelfLifeDays) return false;
-      const expiry = item.expiryDate ? new Date(item.expiryDate) : new Date(new Date(item.addedDate).getTime() + (item.shelfLifeDays || 0) * 86400000);
-      const diff = expiry.getTime() - Date.now();
-      return diff < 3 * 86400000; // 3 days
-    });
-
-    return (
-      <div className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center space-x-4">
-            <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center text-xl">
-              <i className="fas fa-boxes-stacked"></i>
-            </div>
-            <div>
-              <p className="text-gray-500 text-sm">Total Items</p>
-              <h3 className="text-2xl font-bold">{inventory.length}</h3>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center space-x-4">
-            <div className="w-12 h-12 bg-red-100 text-red-600 rounded-xl flex items-center justify-center text-xl">
-              <i className="fas fa-clock-rotate-left"></i>
-            </div>
-            <div>
-              <p className="text-gray-500 text-sm">Expiring Soon</p>
-              <h3 className="text-2xl font-bold">{expiringSoon.length}</h3>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center space-x-4">
-            <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center text-xl">
-              <i className="fas fa-leaf"></i>
-            </div>
-            <div>
-              <p className="text-gray-500 text-sm">Fresh Items</p>
-              <h3 className="text-2xl font-bold">{inventory.filter(i => i.freshness === 'Fresh').length}</h3>
-            </div>
-          </div>
-        </div>
-
-        {activeTab === Command.SHOW_REMINDERS && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h2 className="text-xl font-bold mb-4 flex items-center">
-              <i className="fas fa-bell text-amber-500 mr-2"></i>
-              Smart Reminders
-            </h2>
-            {loading ? (
-              <div className="animate-pulse space-y-3">
-                <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                <div className="h-4 bg-gray-200 rounded w-1/2"></div>
-                <div className="h-4 bg-gray-200 rounded w-2/3"></div>
-              </div>
-            ) : analysisResult?.reminders ? (
-              <ul className="space-y-3">
-                {analysisResult.reminders.map((r, i) => (
-                  <li key={i} className="flex items-start p-3 bg-amber-50 border-l-4 border-amber-400 rounded-r-lg text-amber-800">
-                    <span className="mr-3 mt-1">•</span>
-                    {r}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-gray-500 italic">No urgent reminders. Your inventory looks good!</p>
-            )}
-          </div>
-        )}
-
-        {activeTab === Command.SHOW_NUTRITION && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-             <h2 className="text-xl font-bold mb-4 flex items-center">
-              <i className="fas fa-chart-pie text-indigo-500 mr-2"></i>
-              Inventory Nutrition Analysis
-            </h2>
-            <div className="h-64 mb-6">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={[
-                  { name: 'Prot (g)', val: inventory.reduce((acc, i) => acc + (i.nutrition?.protein || 0), 0) },
-                  { name: 'Carb (g)', val: inventory.reduce((acc, i) => acc + (i.nutrition?.carbs || 0), 0) },
-                  { name: 'Fat (g)', val: inventory.reduce((acc, i) => acc + (i.nutrition?.fats || 0), 0) }
-                ]}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="val">
-                    <Cell fill="#10b981" />
-                    <Cell fill="#3b82f6" />
-                    <Cell fill="#f59e0b" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            {analysisResult?.nutritionSummary && (
-              <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 text-indigo-900 leading-relaxed">
-                {analysisResult.nutritionSummary}
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === Command.SUGGEST_RECIPES && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {loading ? (
-              [1, 2].map(i => (
-                <div key={i} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 animate-pulse h-48"></div>
-              ))
-            ) : analysisResult?.recipes?.map((recipe, idx) => (
-              <div key={idx} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
-                <div className="flex justify-between items-start mb-4">
-                  <h3 className="text-xl font-bold text-gray-800">{recipe.title}</h3>
-                  <span className={`px-2 py-1 rounded text-xs font-bold ${
-                    recipe.difficulty === 'Easy' ? 'bg-green-100 text-green-700' : 
-                    recipe.difficulty === 'Medium' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
-                  }`}>
-                    {recipe.difficulty}
-                  </span>
-                </div>
-                <div className="flex items-center text-sm text-gray-500 mb-4">
-                  <i className="fas fa-clock mr-2"></i>
-                  {recipe.prepTime}
-                </div>
-                <div className="space-y-4">
-                  <div>
-                    <h4 className="font-semibold text-sm uppercase tracking-wider text-gray-400 mb-2">Ingredients</h4>
-                    <ul className="text-sm text-gray-600 list-disc list-inside">
-                      {recipe.ingredients.map((ing, i) => <li key={i}>{ing}</li>)}
-                    </ul>
-                  </div>
-                  <button className="w-full py-2 bg-emerald-50 text-emerald-700 font-bold rounded-lg hover:bg-emerald-100 transition-colors">
-                    View Instructions
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const renderInventory = () => (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Your Kitchen</h2>
-        <div className="flex space-x-2">
-           <span className="bg-gray-200 text-gray-700 px-3 py-1 rounded-full text-xs font-medium">
-             {inventory.length} Items
-           </span>
-        </div>
-      </div>
+      const response = await analyzeFood(
+        Command.VALIDATE_INPUT, 
+        undefined, 
+        [], 
+        `User Stage: ${onboardingStage}, User Input: ${userInput}`,
+        userProfile || undefined
+      );
       
-      {inventory.length === 0 ? (
-        <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-gray-200">
-           <i className="fas fa-basket-shopping text-gray-300 text-6xl mb-4"></i>
-           <p className="text-gray-500 text-lg">Your inventory is empty.<br/>Scan some items to get started!</p>
-           <button 
-            onClick={() => setActiveTab(Command.SCAN_ITEM)}
-            className="mt-4 text-emerald-600 font-bold hover:underline"
-           >
-            Scan an item now
-           </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {inventory.map(item => (
-            <div key={item.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 relative group overflow-hidden">
-              <button 
-                onClick={() => removeItem(item.id)}
-                className="absolute top-4 right-4 text-gray-300 hover:text-red-500 transition-colors"
-              >
-                <i className="fas fa-trash"></i>
-              </button>
-              
-              <div className="flex items-start space-x-3">
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl shrink-0 ${
-                  item.type === 'packaged' ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'
-                }`}>
-                  <i className={item.type === 'packaged' ? 'fas fa-box' : 'fas fa-apple-whole'}></i>
-                </div>
-                <div>
-                  <h3 className="font-bold text-gray-900 truncate pr-6">{item.name}</h3>
-                  <p className="text-xs text-gray-400">{item.brand || 'Fresh Produce'}</p>
-                </div>
-              </div>
+      if (onboardingStage === 'name') {
+        setOnboardingStage('demo');
+        setChatHistory(prev => [...prev, { 
+          role: 'gusto', 
+          text: `Enchanté, ${userInput}! Let me demonstrate my Neural Eye. It analyzes food with molecular precision. Shall we begin the scan demo?` 
+        }]);
+      } else if (onboardingStage === 'origin') {
+        setOnboardingStage('cuisine');
+        setChatHistory(prev => [...prev, { 
+          role: 'gusto', 
+          text: response.chefReaction || "Magnificent. And what culinary tradition inspires you most?" 
+        }]);
+      } else if (onboardingStage === 'cuisine') {
+        const profile: UserProfile = { 
+          name: chatHistory.find(m => m.role === 'user')?.text || "Friend", 
+          origin: "Earth", 
+          cuisine: userInput, 
+          memory: [] 
+        };
+        setUserProfile(profile);
+        localStorage.setItem('eat-repeat-profile', JSON.stringify(profile));
+        setOnboardingStage('complete');
+      }
+    } catch (err) {
+      setChatHistory(prev => [...prev, { role: 'gusto', text: "Pardonnez-moi, my neural circuits are a bit cluttered. Let's try again." }]);
+    } finally {
+      setIsThinking(false);
+    }
+  };
 
-              <div className="mt-4 flex flex-wrap gap-2">
-                {item.freshness && (
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                    item.freshness === 'Fresh' ? 'bg-green-100 text-green-700' :
-                    item.freshness === 'Medium' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
-                  }`}>
-                    {item.freshness}
-                  </span>
-                )}
-                {item.expiryDate ? (
-                  <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase">
-                    Expires: {new Date(item.expiryDate).toLocaleDateString()}
-                  </span>
-                ) : (
-                  <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase">
-                    No Expiry Date
-                  </span>
-                )}
-              </div>
+  const startDemo = () => {
+    setIsMainBubbleActive(false);
+    setActiveTab(Command.SCAN_ITEM);
+    setTutorialNarration("Initializing visual capture system...");
 
-              {item.nutrition && (item.nutrition.calories > 0 || item.nutrition.protein > 0) ? (
-                <div className="mt-4 pt-4 border-t border-gray-50 grid grid-cols-2 gap-2 text-[11px] text-gray-500">
-                  <div className="flex justify-between">
-                    <span>Cals</span>
-                    <span className="font-bold text-gray-700">{item.nutrition.calories}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Prot</span>
-                    <span className="font-bold text-gray-700">{item.nutrition.protein}g</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 pt-4 border-t border-gray-50 text-[10px] text-gray-400 italic">
-                  Nutrition label not found
-                </div>
-              )}
-              
-              {item.storageAdvice && (
-                <div className="mt-3 p-2 bg-blue-50 text-blue-700 text-[10px] rounded-lg">
-                  <i className="fas fa-info-circle mr-1"></i>
-                  {item.storageAdvice}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+    setTimeout(() => {
+      setTutorialAssetsFlying([ASSETS.MILK]);
+      setTutorialNarration("Detected: Velvet Farms Whole Milk. Extracting shelf-life metadata...");
+      
+      setTimeout(() => {
+        setTutorialAssetsFlying([ASSETS.MILK, ASSETS.APPLE]);
+        setTutorialNarration("Detected: Organic Fuji Apple. Analyzing freshness markers...");
+        
+        setTimeout(() => {
+          setLoading(true);
+          setTutorialAssetsFlying([]);
+          setTimeout(() => {
+            setLoading(false);
+            setAnalysisResult({
+              item: {
+                id: 'demo-milk',
+                name: 'Fresh Whole Milk',
+                brand: 'Velvet Farms',
+                type: 'packaged',
+                expiryDate: '2024-12-05',
+                imageUrl: ASSETS.MILK,
+                storageAdvice: 'Keep chilled at 4°C.',
+                addedDate: new Date().toISOString()
+              }
+            });
+            setTutorialNarration("Analysis complete. Review the digital signature below.");
+          }, 2500);
+        }, 1500);
+      }, 1500);
+    }, 1000);
+  };
+
+  const handleFinishDemo = () => {
+    if (analysisResult?.item) addItem(analysisResult.item);
+    setAnalysisResult(null);
+    setOnboardingStage('origin');
+    setIsMainBubbleActive(true);
+    setChatHistory(prev => [...prev, { 
+      role: 'gusto', 
+      text: "Magnifique! Your first items are safely vaulted. Now, mon ami, where in the world are you from?" 
+    }]);
+    setActiveTab(Command.SHOW_INVENTORY);
+  };
+
+  const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
+    // Fallback if local image loading fails
+    e.currentTarget.onerror = null;
+    e.currentTarget.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'%3E%3Crect fill='%23f1f5f9' width='100' height='100'/%3E%3Ctext x='50' y='50' font-family='Arial' font-size='12' fill='%2394a3b8' text-anchor='middle' dy='.3em'%3EIMG%3C/text%3E%3C/svg%3E";
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col max-w-4xl mx-auto px-4 py-6">
-      <header className="flex justify-between items-center mb-8">
-        <div className="flex items-center space-x-2">
-          <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center text-white shadow-lg">
-            <i className="fas fa-kitchen-set"></i>
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight text-gray-900">FreshTrack<span className="text-emerald-600">AI</span></h1>
-        </div>
-        <div className="flex items-center space-x-4">
-          <button className="text-gray-400 hover:text-gray-600">
-            <i className="fas fa-user-circle text-2xl"></i>
-          </button>
-        </div>
-      </header>
+    <div className="min-h-screen bg-[#F8FAFC] flex flex-col max-w-7xl mx-auto px-4 md:px-12 py-10 antialiased overflow-x-hidden selection:bg-emerald-100">
+      
+      <Header profile={userProfile} isVisible={showAppUI} />
 
-      <main className="flex-1 pb-24">
-        {activeTab === Command.SCAN_ITEM && (
-          <div className="flex flex-col items-center">
-            {!analysisResult && (
-              <div className="w-full text-center mb-8">
-                <h2 className="text-3xl font-extrabold text-gray-900 mb-2">Scan Your Groceries</h2>
-                <p className="text-gray-500">Snap up to 3 angles for high-precision detection.</p>
+      {/* Onboarding Chat Bubble - Centered and High Z-Index */}
+      {!userProfile && isMainBubbleActive && (
+        <div className="fixed inset-0 z-[500] flex items-center justify-center p-6 bg-slate-900/70 backdrop-blur-xl">
+          <div className="bg-white rounded-[3rem] shadow-6xl overflow-hidden flex flex-col border border-white/20 animate-scale-up w-full max-w-xl">
+            <div className="p-8 bg-slate-900 text-white flex items-center space-x-6">
+              <ChefAvatar size="lg" className="flex-shrink-0" />
+              <div>
+                <h3 className="font-black text-2xl tracking-tight">Chef Gusto</h3>
+                <p className="text-[10px] uppercase font-black tracking-[0.4em] text-emerald-400">Neural Intelligence</p>
               </div>
-            )}
-            
-            <Scanner onAnalyze={handleScanAnalysis} isProcessing={loading} />
+            </div>
+
+            <div className="flex-1 p-8 overflow-y-auto space-y-6 max-h-[50vh] custom-scrollbar bg-slate-50/30">
+              {chatHistory.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'gusto' ? 'justify-start' : 'justify-end'} animate-slide-up`}>
+                  <div className={`max-w-[85%] p-5 rounded-[2rem] font-bold text-base leading-relaxed ${
+                    msg.role === 'gusto' ? 'bg-white text-slate-800 rounded-tl-none border border-slate-100 shadow-sm' : 'bg-slate-900 text-white rounded-tr-none shadow-xl'
+                  }`}>
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+              {isThinking && (
+                <div className="flex space-x-2 p-2">
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce [animation-delay:0.1s]"></div>
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce [animation-delay:0.2s]"></div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            <div className="p-8 bg-white border-t border-slate-100">
+              {onboardingStage === 'demo' ? (
+                <button 
+                  onClick={startDemo} 
+                  className="w-full py-6 bg-emerald-600 text-white rounded-3xl font-black uppercase text-xs tracking-widest shadow-3xl hover:bg-emerald-500 transition-all transform active:scale-95"
+                >
+                  Launch Demo Analysis
+                </button>
+              ) : (
+                <form onSubmit={handleChatSubmit} className="flex space-x-4">
+                  <input 
+                    autoFocus
+                    value={chefInput}
+                    onChange={(e) => setChefInput(e.target.value)}
+                    placeholder="Enter message..."
+                    className="flex-1 bg-slate-50 border-none rounded-2xl px-6 py-4 text-base font-bold outline-none ring-2 ring-transparent focus:ring-emerald-500/20"
+                  />
+                  <button type="submit" className="w-14 h-14 bg-slate-900 text-white rounded-2xl flex items-center justify-center shadow-lg hover:bg-slate-800 transition-all">
+                    <i className="fas fa-paper-plane"></i>
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tutorial Narration Pill - Visible during demo only */}
+      {isDemoRunning && !isMainBubbleActive && (
+        <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[400] w-full max-w-xl px-6 animate-slide-down">
+          <div className="bg-slate-900/95 backdrop-blur-2xl text-white p-6 rounded-[3rem] shadow-6xl flex items-center space-x-6 border border-white/10">
+            <ChefAvatar size="md" className="flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-[10px] font-black uppercase tracking-[0.5em] text-emerald-400 mb-1">Gusto Live Feed</p>
+              <p className="text-base font-bold leading-snug">{tutorialNarration}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <main className={`flex-1 pb-44 transition-all duration-700 ${showAppUI ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+        {activeTab === Command.SCAN_ITEM && (
+          <div className="max-w-4xl mx-auto space-y-16 animate-fade-in">
+            <Scanner 
+              onAnalyze={(imgs) => console.log(imgs)}
+              isProcessing={loading}
+              tutorialAssetsFlying={tutorialAssetsFlying}
+              demoImage={isDemoRunning ? ASSETS.MILK : null}
+            />
 
             {analysisResult?.item && (
-              <div className="mt-8 w-full bg-white p-6 rounded-3xl shadow-xl border border-gray-100 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                {!analysisResult.item.expiryDate && (
-                  <div className="mb-4 p-4 bg-amber-50 border-l-4 border-amber-500 rounded-r-xl flex items-start space-x-3 text-amber-900">
-                    <i className="fas fa-triangle-exclamation mt-1 text-amber-600"></i>
-                    <div>
-                      <p className="font-bold text-sm">Expiry Date Not Found</p>
-                      <p className="text-xs opacity-80">Gemini could not locate a clear date in the scans. Please check manually.</p>
-                    </div>
-                  </div>
-                )}
-
-                {(analysisResult.item.type === 'packaged' && (!analysisResult.item.nutrition || analysisResult.item.nutrition.calories === 0)) && (
-                  <div className="mb-6 p-4 bg-blue-50 border-l-4 border-blue-500 rounded-r-xl flex items-start space-x-3 text-blue-900">
-                    <i className="fas fa-info-circle mt-1 text-blue-600"></i>
-                    <div>
-                      <p className="font-bold text-sm">Nutrition Facts Unavailable</p>
-                      <p className="text-xs opacity-80">Nutrition label was not visible. No facts were assumed.</p>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex justify-between items-start mb-6">
-                  <div>
-                    <h2 className="text-2xl font-bold text-gray-900">{analysisResult.item.name}</h2>
-                    <p className="text-gray-500 uppercase tracking-widest text-xs font-bold">{analysisResult.item.brand || 'Identified Item'}</p>
-                  </div>
-                  <div className={`px-4 py-2 rounded-full font-bold text-sm ${
-                    analysisResult.item.freshness === 'Fresh' ? 'bg-emerald-100 text-emerald-700' :
-                    analysisResult.item.freshness === 'Medium' ? 'bg-amber-100 text-amber-700' :
-                    'bg-red-100 text-red-700'
-                  }`}>
-                    {analysisResult.item.freshness || 'Verified'}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                  <div className={`p-4 rounded-2xl text-center ${analysisResult.item.nutrition?.calories ? 'bg-gray-50' : 'bg-gray-100 opacity-40'}`}>
-                    <p className="text-xs text-gray-400 mb-1">Calories</p>
-                    <p className="text-xl font-bold text-gray-800">{analysisResult.item.nutrition?.calories || '--'}</p>
-                  </div>
-                  <div className={`p-4 rounded-2xl text-center ${analysisResult.item.nutrition?.protein ? 'bg-gray-50' : 'bg-gray-100 opacity-40'}`}>
-                    <p className="text-xs text-gray-400 mb-1">Protein</p>
-                    <p className="text-xl font-bold text-gray-800">{analysisResult.item.nutrition?.protein || '--'}g</p>
-                  </div>
-                  <div className={`p-4 rounded-2xl text-center ${analysisResult.item.nutrition?.carbs ? 'bg-gray-50' : 'bg-gray-100 opacity-40'}`}>
-                    <p className="text-xs text-gray-400 mb-1">Carbs</p>
-                    <p className="text-xl font-bold text-gray-800">{analysisResult.item.nutrition?.carbs || '--'}g</p>
-                  </div>
-                  <div className={`p-4 rounded-2xl text-center ${analysisResult.item.nutrition?.fats ? 'bg-gray-50' : 'bg-gray-100 opacity-40'}`}>
-                    <p className="text-xs text-gray-400 mb-1">Fats</p>
-                    <p className="text-xl font-bold text-gray-800">{analysisResult.item.nutrition?.fats || '--'}g</p>
-                  </div>
-                </div>
-
-                <div className="space-y-4 mb-8">
-                  <div className="flex items-center space-x-3 text-sm">
-                    <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center">
-                      <i className="fas fa-calendar-day"></i>
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-semibold">Expiry Date</p>
-                      <p className={`text-gray-500 ${!analysisResult.item.expiryDate ? 'italic text-amber-600 font-medium' : ''}`}>
-                        {analysisResult.item.expiryDate || 'NOT DETECTED'}
-                      </p>
-                    </div>
-                  </div>
-                  {analysisResult.item.notes && (
-                    <div className="p-4 bg-gray-50 border border-gray-100 rounded-xl text-xs text-gray-600 leading-relaxed">
-                      <p className="font-bold text-gray-400 uppercase tracking-widest text-[9px] mb-1">AI Analyst Notes</p>
-                      {analysisResult.item.notes}
-                    </div>
-                  )}
-                  <div className="flex items-center space-x-3 text-sm">
-                    <div className="w-8 h-8 bg-amber-100 text-amber-600 rounded-lg flex items-center justify-center">
-                      <i className="fas fa-temperature-half"></i>
-                    </div>
-                    <div>
-                      <p className="font-semibold">Storage Advice</p>
-                      <p className="text-gray-500">{analysisResult.item.storageAdvice || 'Keep in a cool dry place'}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex space-x-3">
-                   <button 
-                    onClick={() => setAnalysisResult(null)}
-                    className="flex-1 py-4 bg-gray-100 text-gray-700 font-bold rounded-2xl hover:bg-gray-200 transition-colors"
-                  >
-                    Discard
-                  </button>
-                  <button 
-                    onClick={addItemToInventory}
-                    className="flex-[2] py-4 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-all shadow-lg hover:shadow-emerald-200"
-                  >
-                    Add to Inventory
-                  </button>
+              <div id="results-card" className="bg-white p-10 md:p-16 rounded-[4rem] shadow-6xl border border-slate-50 animate-scale-up">
+                <div className="flex flex-col md:flex-row gap-12">
+                   <div className="w-full md:w-1/3 aspect-[3/4] rounded-[2.5rem] overflow-hidden shadow-2xl bg-slate-100 border-4 border-white">
+                      <img 
+                        src={analysisResult.item.imageUrl || ASSETS.MILK} 
+                        className="w-full h-full object-cover" 
+                        alt="Scan Result" 
+                        onError={handleImageError}
+                      />
+                   </div>
+                   <div className="flex-1 space-y-8">
+                      <div>
+                        <span className="text-[11px] font-black uppercase tracking-[0.5em] text-emerald-500 mb-2 block">Neural Eye Profiling</span>
+                        <h2 className="text-5xl font-black text-slate-900 tracking-tighter">{analysisResult.item.name}</h2>
+                        <p className="text-xl font-bold text-slate-400">{analysisResult.item.brand || 'Bio-signature'}</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                           <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Expiration</label>
+                           <p className="text-lg font-black">{analysisResult.item.expiryDate || 'N/A'}</p>
+                        </div>
+                        <div className="bg-emerald-50 p-6 rounded-3xl border border-emerald-100">
+                           <label className="text-[10px] font-black uppercase text-emerald-600/60 mb-1 block">Freshness</label>
+                           <p className="text-lg font-black text-emerald-600">Perfect</p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={handleFinishDemo}
+                        className="w-full py-7 bg-slate-900 text-white font-black rounded-full shadow-6xl uppercase tracking-widest hover:bg-emerald-600 transition-all ring-8 ring-slate-900/5 active:scale-95"
+                      >
+                        Secure in Vault
+                      </button>
+                   </div>
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {activeTab === Command.SHOW_INVENTORY && renderInventory()}
-        {(activeTab === Command.SHOW_REMINDERS || activeTab === Command.SHOW_NUTRITION || activeTab === Command.SUGGEST_RECIPES) && renderDashboard()}
+        {activeTab === Command.SHOW_INVENTORY && (
+          <div className="space-y-16 animate-fade-in">
+            <div className="flex flex-col md:flex-row justify-between items-center md:items-end gap-10">
+              <div className="text-center md:text-left">
+                <h2 className="text-8xl font-black text-slate-900 tracking-tighter leading-none opacity-90 uppercase">Vault</h2>
+                <p className="text-slate-400 text-2xl font-medium tracking-tight">Currently monitoring {inventory.length} biological assets.</p>
+              </div>
+              <button onClick={() => setActiveTab(Command.SCAN_ITEM)} className="px-12 py-6 bg-slate-900 text-white rounded-full font-black text-[11px] uppercase tracking-[0.2em] shadow-6xl hover:bg-emerald-500 transition-all scale-110 active:scale-100 ring-8 ring-slate-900/5">
+                Launch Eye
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
+              {inventory.length === 0 ? (
+                <div className="col-span-full py-48 bg-white rounded-[4rem] border-2 border-dashed border-slate-100 text-center flex flex-col items-center justify-center space-y-8 group hover:border-emerald-200 transition-all cursor-pointer" onClick={() => setActiveTab(Command.SCAN_ITEM)}>
+                   <div className="w-24 h-24 bg-slate-50 rounded-full flex items-center justify-center text-slate-200"><i className="fas fa-boxes-stacked text-4xl"></i></div>
+                   <p className="text-slate-300 text-3xl font-black uppercase tracking-[0.5em]">Vault Idle</p>
+                </div>
+              ) : (
+                inventory.map((item, idx) => (
+                  <div key={item.id} className="bg-white rounded-[3rem] p-8 shadow-sm border border-slate-50 hover:shadow-6xl hover:-translate-y-3 transition-all group relative overflow-hidden animate-scale-up" style={{ animationDelay: `${idx * 100}ms` }}>
+                    <div className="w-full aspect-square rounded-[2rem] bg-slate-100 overflow-hidden mb-6 shadow-xl group-hover:scale-105 transition-transform duration-500">
+                      <img 
+                        src={item.imageUrl || ASSETS.MILK} 
+                        className="w-full h-full object-cover" 
+                        alt={item.name} 
+                        onError={handleImageError}
+                      />
+                    </div>
+                    <h3 className="text-2xl font-black text-slate-900 tracking-tight mb-1">{item.name}</h3>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">{item.brand || 'Visual ID Captured'}</p>
+                    <div className="flex items-center space-x-3 bg-slate-50 py-3 px-5 rounded-full text-[10px] font-black uppercase shadow-inner group-hover:bg-slate-900 group-hover:text-white transition-colors duration-500">
+                       <span className={`w-2 h-2 rounded-full ${item.expiryDate && new Date(item.expiryDate).getTime() - Date.now() < 259200000 ? 'bg-rose-500 animate-pulse' : 'bg-emerald-400'}`}></span>
+                       <span>{item.expiryDate || 'Verified'}</span>
+                    </div>
+                    <button onClick={() => removeItem(item.id)} className="absolute top-6 right-6 text-slate-100 hover:text-rose-500 transition-colors p-2 group-hover:opacity-100 opacity-0"><i className="fas fa-trash-can text-base"></i></button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
       </main>
 
-      <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-2xl bg-white/80 backdrop-blur-xl border border-white/50 shadow-2xl rounded-3xl p-2 flex justify-between items-center z-50">
-        <button 
-          onClick={() => setActiveTab(Command.SCAN_ITEM)}
-          className={`flex-1 flex flex-col items-center justify-center py-3 rounded-2xl transition-all ${activeTab === Command.SCAN_ITEM ? 'bg-emerald-600 text-white shadow-lg' : 'text-gray-400 hover:text-emerald-600'}`}
-        >
-          <i className="fas fa-plus-circle text-xl mb-1"></i>
-          <span className="text-[10px] font-bold uppercase tracking-tighter">Scan</span>
-        </button>
-        <button 
-          onClick={() => executeCommand(Command.SHOW_INVENTORY)}
-          className={`flex-1 flex flex-col items-center justify-center py-3 rounded-2xl transition-all ${activeTab === Command.SHOW_INVENTORY ? 'bg-emerald-600 text-white shadow-lg' : 'text-gray-400 hover:text-emerald-600'}`}
-        >
-          <i className="fas fa-list-ul text-xl mb-1"></i>
-          <span className="text-[10px] font-bold uppercase tracking-tighter">Stock</span>
-        </button>
-        <button 
-          onClick={() => executeCommand(Command.SHOW_REMINDERS)}
-          className={`flex-1 flex flex-col items-center justify-center py-3 rounded-2xl transition-all ${activeTab === Command.SHOW_REMINDERS ? 'bg-emerald-600 text-white shadow-lg' : 'text-gray-400 hover:text-emerald-600'}`}
-        >
-          <i className="fas fa-bell text-xl mb-1"></i>
-          <span className="text-[10px] font-bold uppercase tracking-tighter">Alerts</span>
-        </button>
-        <button 
-          onClick={() => executeCommand(Command.SHOW_NUTRITION)}
-          className={`flex-1 flex flex-col items-center justify-center py-3 rounded-2xl transition-all ${activeTab === Command.SHOW_NUTRITION ? 'bg-emerald-600 text-white shadow-lg' : 'text-gray-400 hover:text-emerald-600'}`}
-        >
-          <i className="fas fa-heart-pulse text-xl mb-1"></i>
-          <span className="text-[10px] font-bold uppercase tracking-tighter">Health</span>
-        </button>
-        <button 
-          onClick={() => executeCommand(Command.SUGGEST_RECIPES)}
-          className={`flex-1 flex flex-col items-center justify-center py-3 rounded-2xl transition-all ${activeTab === Command.SUGGEST_RECIPES ? 'bg-emerald-600 text-white shadow-lg' : 'text-gray-400 hover:text-emerald-600'}`}
-        >
-          <i className="fas fa-mortar-pestle text-xl mb-1"></i>
-          <span className="text-[10px] font-bold uppercase tracking-tighter">Recipes</span>
-        </button>
+      {/* Persistence Nav Controller */}
+      <nav className={`fixed bottom-10 left-1/2 -translate-x-1/2 w-[90%] max-w-2xl bg-slate-900/98 backdrop-blur-3xl rounded-full p-3 flex justify-between items-center z-[200] shadow-6xl border border-white/10 transition-all duration-1000 ${showAppUI ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-24 pointer-events-none'}`}>
+        {[
+          { id: Command.SCAN_ITEM, label: 'Eye', icon: 'fa-camera-viewfinder' },
+          { id: Command.SHOW_INVENTORY, label: 'Vault', icon: 'fa-box-archive' },
+          { id: Command.SHOW_NUTRITION, label: 'Vital', icon: 'fa-heart-pulse' }
+        ].map(tab => (
+          <button 
+            key={tab.id} 
+            onClick={() => { setActiveTab(tab.id); setAnalysisResult(null); }}
+            className={`flex-1 flex flex-col items-center justify-center py-5 rounded-full transition-all duration-500 ${activeTab === tab.id ? 'bg-emerald-600 text-white shadow-3xl scale-110' : 'text-slate-500 hover:text-white'}`}
+          >
+            <i className={`fas ${tab.icon} text-xl mb-1`}></i>
+            <span className="text-[8px] font-black uppercase tracking-[0.3em]">{tab.label}</span>
+          </button>
+        ))}
       </nav>
+
+      <style>{`
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+        @keyframes scaleUp { 0% { transform: scale(0.7); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        @keyframes slideUp { 0% { transform: translateY(20px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+        @keyframes slideDown { 0% { transform: translate(-50%, -100%); opacity: 0; } 100% { transform: translate(-50%, 0); opacity: 1; } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes flyInScanner { 0% { transform: translate(100vw, 30vh) scale(3); opacity: 0; } 100% { transform: translate(0, 0) scale(1); opacity: 1; } }
+        
+        .animate-scale-up { animation: scaleUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        .animate-slide-up { animation: slideUp 0.4s ease-out both; }
+        .animate-slide-down { animation: slideDown 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        .animate-fade-in { animation: fadeIn 0.8s ease-out; }
+        .animate-float { animation: float 6s ease-in-out infinite; }
+        .animate-fly-to-scanner { animation: flyInScanner 1.2s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        
+        .shadow-6xl { box-shadow: 0 40px 100px -20px rgba(0,0,0,0.5), 0 20px 40px -20px rgba(0,0,0,0.4); }
+        .shadow-3xl { box-shadow: 0 15px 35px -5px rgba(16,185,129,0.4); }
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 10px; }
+      `}</style>
     </div>
   );
 };
